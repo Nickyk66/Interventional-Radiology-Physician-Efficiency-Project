@@ -1,0 +1,666 @@
+---
+title: "IR Center Project"
+author: "Nicholas Kaufman"
+date: "2025-05-14"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, root.dir = "Users/nickkaufman/downloads")
+library(readxl)
+library(binom)
+library(ggplot2)
+library(devtools)
+library(fANCOVA)
+library(plotly)
+library(dplyr)
+library(tidyr)
+library(corrplot)
+library(lubridate)
+library(patchwork)
+library(effectsize)
+library(Matrix)
+library(mgcv)
+library(ggpubr)
+library(gratia) 
+```
+
+```{r}
+Data <- read_excel("Mentoring Efficiency.xlsx")
+col_types = c("text", "text", "date", 
+"numeric", "numeric", "skip", "skip", 
+"skip")
+
+colnames(Data) <- c("Site", "Patient_Last_Name", "Procedure_Date", 
+"Fluoroscopy_Time", "Radiation_Dose")
+
+Data <- Data %>%
+  mutate(Site = ifelse(Site == "St. Louis", "St.Louis", Site))
+
+Data <- Data %>% na.omit(Data)
+
+ ata <- Data[-c(106, 162, 176, 1287), ]
+ Data <- Data[order(Data$Site, Data$Procedure_Date), ]
+ Data$Month <- format(Data$Procedure_Date, "%B %Y")
+ 
+Data <- Data %>%
+  mutate(Month_Date = floor_date(Procedure_Date, unit = "month"),
+         Month = format(Month_Date, "%B %Y")) 
+Data <- Data %>%
+  mutate(Site = factor(Site),
+         Month = factor(Month, levels = unique(Month[order(Month_Date)])))
+
+```
+
+```{r}
+Mean_Fluro_Time <- Data %>%
+  group_by(Site) %>%
+  summarise(Mean_Fluoro_Time = mean(Fluoroscopy_Time, na.rm = TRUE))
+
+ggplot(Mean_Fluro_Time, aes(x = Site, y = Mean_Fluoro_Time)) +
+  geom_col( fill = "steelblue", color = "black") +
+  labs(title = "Mean Fluoroscopy Times by Site",
+       x = "Site",
+       y = "Mean Fluoroscopy Time (minutes)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+If we're looking at the data from the most broad viewpoint, we see that
+Wilmington had the lowest Fluoro times averaged out over the study duration, 
+with St. Louis, having the highest. Though it has yet to be determined whether 
+these differences are significant. Despite this, it would be much more 
+beneficial to look at the data as a progression rather than a blanket average 
+as a whole.
+
+```{r}
+Monthly_Site_Averages <- Data %>%
+    group_by(Site, Month) %>%
+    summarise(Mean_Fluoroscopy_Time = mean(Fluoroscopy_Time, na.rm = TRUE), 
+              .groups = "drop")
+```
+
+Let's look at each location individually as a time series progression.
+
+Louisville
+```{r}
+Louisville <- Data %>% dplyr::filter (Site == "Louisville") %>% 
+  arrange(Procedure_Date)
+
+Plot1 <- ggplot(Louisville, aes(Procedure_Date, Fluoroscopy_Time)) + 
+  geom_line(color = "steelblue") + 
+geom_smooth(method = "loess", se = FALSE, color = "red", size=1) +
+labs(x="Months", y="Fluoro Time", title= "Time Series of Louisville Fluro Time")
+
+Louisville.Table <- tibble(
+Month = c("August 2024", "September 2024", "October 2024", "November 2024", 
+          "December 2024", "January 2025"),
+Mean_Fluoroscopy_Time = c("28.60000", "32.90588", "30.99608", "25.27727", 
+                          "27.01707", "27.28810")
+)
+
+Table <- ggtexttable(Louisville.Table, rows = NULL,
+                  theme = ttheme("light"))
+Plot1 / Table
+```
+Looking at the time series, it's difficult to infer any real difference in
+fluoro time over the year. We'd expect a provider's performance to increase 
+(inversely decreasing procedure time) over
+the course of the year, but there seems to be small, most likely arbitrary 
+differences in mean fluoroscopy time at the Louisville site. However, 
+it is worth a look to see if any of the differences are statistically 
+significant. 
+
+```{r}
+Louisville$Month <- factor(Louisville$Month)
+Louisville.Anova <- aov(Fluoroscopy_Time ~ Month, data = Louisville)
+summary(Louisville.Anova)
+
+TukeyHSD(Louisville.Anova)
+
+effectsize(Louisville.Anova)
+
+```
+First off, a one-way ANOVA test of the two variables was performed 
+(month and fluoro time). The test returned a significant result 
+(F(5, 218) = 3.877, p < 000219)) so there appears to be some significant 
+difference between at least two of the months based on average fluoro time. 
+
+To properly identify the months in which there was a significant difference, 
+the TukeyHSD post-hoc test was performed. This found a significant difference 
+between October 2024 and November 2024, as well as September 2024 and 
+November 2024. These p-values were 0.02 and 0.003 respectively (p < 0.05). 
+No other month-to-month comparisons, including between mid-2024 and 
+January 2025, reached statistical significance. This is notable because one 
+might expect the greatest difference during this later period, potentially 
+reflecting increased cumulative treatment volume or enhanced training. 
+
+Lastly, an effect size (Eta-squared) was caluclated, which came out to 0.08, 
+meaning 8% of the variation in fluoroscopy time can be explained by the month 
+in which the procedure was performed. Conversely, 92% of the variation is due to 
+variability in the month itself, which tells us other variables may be more of a 
+factor (procedure volume, average age of the patient, systemic disease, general 
+anatomy, etc.). It figures that the inherent anatomical variance of patients 
+could vary significantly within a month, causing the bulk of the variation. 
+So while there did appear to be a significant difference between the months 
+(only Oct./Nov. 2024 an Sep./Nov. 2024) in terms of fluoroscopy time, only a 
+small portion of the variance is attributed to the data between the months, 
+but rather than within. That being said, 8% could be of significance in regards 
+to physician performance given the correct clinical context.
+
+
+Arizona Site
+```{r}
+Arizona <- Data %>% dplyr::filter (Site == "Arizona") %>% 
+  arrange(Procedure_Date)
+
+Plot2 <- ggplot(Arizona, aes(Procedure_Date, Fluoroscopy_Time)) + 
+  geom_line(color = "red") + 
+geom_smooth(method = "loess", se = FALSE, color = "black", size=1) + labs(x="Months", y="Fluoro Time", title= "Time Series of Arizona Fluro Time")
+
+Arizona.Table <- tibble(
+Month = c("October 2023", "November 2023", "December 2023", "January 2024", 
+          "February 2024", "March 2024", "April 2024", "May 2024", "June 2024", 
+          "July 2024", "August 2024", "September 2024"),
+Mean_Fluoroscopy_Time = c("33.2", "31.7", "30.4", "26.6", "29.3", "31.1", 
+                          "28.2", "26.3", "26.7", "27.8", "29.1", "30.0")
+)
+
+Table2 <- ggtexttable(Arizona.Table, rows = NULL,
+                  theme = ttheme("light", base_size=11))
+Plot2
+Table2
+```
+For Arizona, the time series shows a relatively straight trend line as well. The monthly averages are listed. We will test again for significace.
+
+```{r}
+
+Arizona$Month <- factor(Arizona$Month)
+Arizona.Anova <- aov(Fluoroscopy_Time ~ Month, data = Arizona)
+summary(Arizona.Anova)
+
+TukeyHSD(Arizona.Anova)
+
+effectsize(Arizona.Anova)
+
+```
+Another one-way ANOVA test of the two variables was performed. We have a 
+p-value of 0.101 (p < 0.05) indicating no significant difference between the 
+fluoro time between months over the year. 
+
+This was confirmed with the post-hoc test showing no significant difference 
+between any monthly pairwise comparisons. 
+
+The effect size was calculated at 3% which is not statistically relevent in 
+terms of explaining the variation of fluoroscopy time over the months. 
+3% is too small to be clinically relevent. In summary, Arizona did not show any 
+meaningful difference in fluoroscopy time over the year of data analyzed. 
+
+St. Louis
+```{r}
+
+Data <- Data %>%
+  mutate(Site = recode(Site, `St. Louis` = "St.Louis"))
+
+St.Louis <- Data %>% dplyr::filter (Site == "St.Louis") %>% 
+  arrange(Procedure_Date)
+
+Plot3 <- ggplot(St.Louis, aes(Procedure_Date, Fluoroscopy_Time)) + 
+  geom_line(color = "blue") + 
+geom_smooth(method = "loess", se = FALSE, color = "orange", size=1) +
+labs(x="Months", y="Fluoro Time", title= "Time Series of St.Louis Fluro Time")
+
+St.Louis.Table <- tibble(
+Month = c("July 2023", "August 2023", "September 2023", "October 2023", 
+          "November 2023", "December 2023", "January 2024", "February 2024", 
+          "March 2024", "April 2024", "May 2024", "June 2024",
+"July 2024", "August 2024", "September 2024", "October 2024", "November 2024", 
+"December 2024",
+  "January 2025", "February 2025"),
+  Mean_Fluoroscopy_Time = c(14.4, 36.7, 35.1, 45.6, 32.1, 33.1,
+                            32.8, 37.0, 47.8, 34.8, 43.3, 30.3,
+                            29.2, 29.7, 32.0, 27.4, 30.4, 41.3,
+                            31.7, 31.3)
+)
+
+Table3 <- ggtexttable(St.Louis.Table, rows = NULL,
+                  theme = ttheme("light", base_size=6))
+Plot3
+Table3
+
+```
+
+```{r}
+St.Louis$Month <- factor(St.Louis$Month)
+St.Louis.Anova <- aov(Fluoroscopy_Time ~ Month, data = St.Louis)
+
+summary(St.Louis.Anova)
+
+
+TukeyHSD(St.Louis.Anova)
+
+effectsize(St.Louis.Anova)
+
+```
+For St. Louis, the ANOVA returned a significant effect of month on fluoroscpy 
+time (p= 0.001440, p < 0.05). However, the post-hoc test 
+(again using Tukey's HSD) revealed no significant pairwise interactions between 
+the individual months, and the effect size remains extremely low (0.04). It 
+would be hard to attribute any change in fluoroscopy time to monthly 
+performance, and to that affect, the monthly change in performance of the 
+provider.
+
+Taken together, the ANOVA indicated some statistically significant effect of 
+month on fluoroscopy time, but the abscence of any signifcant pairwise 
+comparisons, and small effect size indicate that the data is practically 
+meaninful. It would not be appropriate to attribute the differences to physician 
+improvement. 
+
+Syracuse/AMP
+
+```{r}
+
+Data <- Data[-c(2089, 1865, 1946), ]
+
+Data <- Data %>%
+mutate(Site = recode(Site, `Syracuse/AMP` = "Syracuse"))
+
+
+Syracuse <- Data %>% dplyr::filter (Site == "Syracuse") %>% 
+  arrange(Procedure_Date)
+
+Plot4 <- ggplot(Syracuse, aes(Procedure_Date, Fluoroscopy_Time)) + 
+  geom_line(color = "black") + 
+geom_smooth(method = "loess", se = FALSE, color = "purple", size=1) +
+labs(x="Months", y="Fluoro Time", 
+     title= "Time Series of Syracuse/AMP Fluro Time")
+
+Syracuse.Table <- tibble( 
+Month = c("July 2024","August 2024","September 2024","October 2024", 
+          "November 2024", "December 2024", "January 2025", "February 2025"),
+Mean_Fluoroscopy_Time = c(32.1, 35.1, 33.5, 26.9, 29.2, 28.4, 22.2, 23.0
+  ))
+
+
+Table4 <- ggtexttable(Syracuse.Table, rows = NULL,
+                  theme = ttheme("light", base_size=11))
+Plot4
+Table4
+
+Syracuse_counts <- Data %>%
+filter(Site == "Syracuse") %>%
+mutate(Month = format(Procedure_Date, "%B %Y")) %>%
+group_by(Month) %>%
+summarise(Count = n()) %>%
+arrange(as.Date(paste0("01 ", Month), "%d %B %Y"))
+Syracuse_counts
+
+```
+Interestingly enough the trend line for Syracuse does appear to be decreasing in 
+a meaningful way. There is only 2 cases for July of 2024, but there is > 28 for 
+all other months which satisfies the appropriate case volume when generating 
+the monthly averages. 
+
+```{r}
+Syracuse$Month <- factor(Syracuse$Month)
+Syracuse.Anova <- aov(Fluoroscopy_Time ~ Month, data = Syracuse)
+summary(Syracuse.Anova)
+
+
+effectsize(Syracuse.Anova)
+
+Tukey <- TukeyHSD(Syracuse.Anova)
+tukey_month <- Tukey$Month
+signif_rows <- tukey_month[tukey_month[, "p adj"] < 0.05, ]
+print(signif_rows)
+
+
+```
+As expected, the ANOVA test returned a very low p-value of 5.1e^-10 
+(p < 0.05, 95% CI), confirming that there is a significant change in average 
+fluoroscopy time over the course of the given time frame. Given the extensive 
+list of pairwise comparisons, they were condensed to show the months in which 
+there is significant pairwise interaction. While there is some significant 
+month to month variation, it's important to note that there is also significant
+variation across January/February 2025 and August 2024. This allows the 
+inference that the provider significantly changed his average fluoroscopy time
+over the entire time frame. The effect size of 18% indicates that the month of 
+the procedure explains about 18% of the variability in fluoroscopy time. 
+This suggests a moderate effect, likely reflecting the provider's improvement 
+over time. However, this (and all prior) analysis considers only the passage 
+of time (months) and does not account for other potential factors that might 
+also influence fluoroscopy time, which in the scope of interventional radiolgy,
+can be quite large. 
+
+In summary, the 18% effect size reflects how much of the variability in 
+fluoroscopy time is explained by time progression (months). Skill improvement is 
+probably a major contributor to this, but the effect also includes all other 
+time-related changes.
+
+Wilmington
+
+```{r}
+
+Wilmington <- Data %>% dplyr::filter (Site == "Wilmington") %>% 
+  arrange(Procedure_Date)
+
+Plot5 <- ggplot(Wilmington, aes(Procedure_Date, Fluoroscopy_Time)) + 
+  geom_line(color = "green") + 
+geom_smooth(method = "loess", se = FALSE, color = "red", size=1) +
+labs(x="Months", y="Fluoro Time", title= "Time Series of Wilmington Fluro Time")
+
+Wilmington.Table <- tibble( 
+Month = c("June 2024", "July 2024", "August 2024", "September 2024", 
+          "October 2024", "November 2024", "December 2024", "January 2025", 
+          "February 2025"
+),
+Mean_Fluoroscopy_Time = c(
+    16.4, 31.8, 34.0, 32.8, 
+    25.2, 26.1, 24.1, 
+    22.2, 22.8
+))
+
+
+Table5 <- ggtexttable(Wilmington.Table, rows = NULL,
+                  theme = ttheme("light", base_size=11))
+Plot5
+Table5
+
+Wilmington_counts <- Data %>%
+filter(Site == "Wilmington") %>%
+mutate(Month = format(Procedure_Date, "%B %Y")) %>%
+group_by(Month) %>%
+summarise(Count = n()) %>%
+arrange(as.Date(paste0("01 ", Month), "%d %B %Y"))
+Wilmington_counts
+
+```
+
+```{r}
+
+Wilmington$Month <- factor(Wilmington$Month)
+Wilmington.Anova <- aov(Fluoroscopy_Time ~ Month, data = Wilmington)
+summary(Wilmington.Anova)
+
+effectsize(Wilmington.Anova)
+
+Tukey1 <- TukeyHSD(Wilmington.Anova)
+tukey_month1 <- Tukey1$Month
+signif_rows1 <- tukey_month1[tukey_month1[, "p adj"] < 0.05, ]
+print(signif_rows1)
+
+```
+
+The ANOVA for Wilmington returned a p-value of 1.88e^08, showing high 
+significance in fluoro time differences between the months (p < 0.05, 95% CI). 
+The effect size was 17%, similar to Syracuse. See the explanation under the 
+Syracuse analysis, as it would be practically identical to what would be written here. There again was a significant difference between the earliest month and the last months of the data set
+
+CROSS SITE ANALYSIS
+
+Generalized Addative Model
+
+Now that each site has been analyzed individually, the next step is to evaluate 
+which training method performs best across all clinical sites collectively. 
+To analyze the variation in fluoroscopy time over several months across multiple 
+sites, I chose to use a Generalized Additive Model (GAM) with Site included as 
+a factor variable.
+
+This modeling approach offers the flexibility to capture nonlinear trends in 
+fluoroscopy time over time within each site, while explicitly accounting for 
+differences between sites as categorical groups. Treating Site as a factor 
+ensures the model recognizes each location as a distinct entity and estimates 
+unique smooth temporal patterns for each site, rather than assuming a uniform or 
+numeric relationship across all sites.
+
+This flexibility is important because each site may have different training 
+methods, workflows, or operational practices that produce distinct temporal 
+dynamics in fluoroscopy times. By including site-specific smooth terms, the GAM 
+can more accurately model these complex patterns, enabling a deeper 
+understanding of how fluoroscopy efficiency evolves differently across locations 
+and, ultimately, how the various training methods compare.
+
+```{r}
+Data1 <- Data %>%
+  mutate(Month_Date = my(Month)) %>%
+  group_by(Site) %>%
+  arrange(Site, Month_Date) %>%
+  mutate(Month_Num = dense_rank(Month_Date)) %>%
+  ungroup()
+
+Data1$Site <- as.factor(Data1$Site)
+
+gam_model <- gam(Fluoroscopy_Time ~ Site + s(Month_Num, by = Site), 
+                 data = Data1)
+
+summary(gam_model)
+plot(gam_model, pages = 1)
+gam.check(gam_model)
+```
+
+
+The parametric coefficients indicate significant baseline differences in 
+average fluoroscopy time between sites. Specifically, compared to the reference 
+site (Arizona), Louisville and Syracuse had significantly lower baseline 
+fluoroscopy times (approximately 5.7 and 7 units lower, respectively; p < 0.05), 
+while St. Louis had a significantly higher baseline time (+4 units, p < 0.001). 
+Wilmington did not differ significantly from Arizona in baseline fluoroscopy 
+time.
+
+The smooth terms for month within each site revealed significant nonlinear 
+temporal patterns for most sites. St. Louis, Syracuse, and Wilmington exhibited 
+complex and highly significant nonlinear trends (effective degrees of
+freedom > 4, p < 0.001), indicating that fluoroscopy times changed in a 
+non-monotonic way across months. Louisville’s temporal trend was simpler but 
+still significant (edf = 1, p = 0.028), while Arizona’s trend was marginally 
+nonsignificant (p = 0.056). These findings suggest that fluoroscopy time 
+performance evolved differently over time at each site, with some sites showing 
+periods of improvement or fluctuation not captured by simple linear trends.
+
+Overall, this model demonstrates meaningful differences in fluoroscopy time 
+between sites and reveals distinct temporal trajectories within each site. 
+This supports the hypothesis that site-specific factors, such as training 
+methods and operational practices, influence the evolution of fluoroscopy 
+efficiency over time. The GAM’s flexibility in capturing nonlinear time effects
+provides a nuanced understanding that simpler linear models would miss.
+
+
+```{r}
+new_data <- Data1 %>%
+  select(Site, Month_Num) %>%
+  distinct() %>%
+  arrange(Site, Month_Num)
+
+new_data <- new_data %>%
+  mutate(pred = predict(gam_model, newdata = ., se.fit = TRUE)$fit,
+         se = predict(gam_model, newdata = ., se.fit = TRUE)$se.fit,
+         lower = pred - 2 * se,
+         upper = pred + 2 * se)
+
+
+ggplot(new_data, aes(x = Month_Num, y = pred, color = Site, fill = Site)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  labs(
+    title = "GAM-Fitted Trends in Fluoroscopy Time by Site",
+    x = "Month Number (relative time)",
+    y = "Predicted Fluoroscopy Time (minutes)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom")
+
+
+```
+The figure displays site-specific temporal trends in fluoroscopy time as modeled 
+by the GAM. Solid lines represent the predicted mean fluoroscopy time across 
+months for each site, while the shaded ribbons indicate approximate 95% 
+confidence intervals around these predictions. The varying shapes of the curves 
+highlight differences in how fluoroscopy time evolved over time at each clinical 
+site. Sites with more pronounced curves and wider ribbons reflect greater 
+nonlinear changes and uncertainty in the trend, consistent with the GAM results. 
+This visualization complements the statistical findings by illustrating the 
+unique temporal patterns captured by the model.
+```{r}
+
+derivs <- derivatives(gam_model)
+
+
+derivs_filtered <- derivs %>%
+  filter(grepl("Month_Num", .smooth))
+
+derivs_summary <- derivs_filtered %>%
+  group_by(Site) %>%
+  summarise(
+    Avg_Derivative = mean(`.derivative`),
+    Min_Derivative = min(`.derivative`),
+    Max_Derivative = max(`.derivative`)
+  ) %>%
+  arrange(Avg_Derivative)
+
+# Print summary
+print(derivs_summary)
+
+ggplot(derivs_summary, aes(x = reorder(Site, Avg_Derivative), 
+                           y = Avg_Derivative)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Average Monthly Rate of Change in Fluoroscopy Time by Site",
+       x = "Site",
+       y = "Average Derivative (minutes per month)") +
+  theme_minimal()
+```
+
+To better understand how fluoroscopy time is evolving over the study period at
+each clinical site, the first derivatives of the smooth terms from the GAM model 
+were computed. These derivatives represent the instantaneous rate of change in 
+fluoroscopy time with respect to month number. Negative derivative values 
+indicate a decrease in fluoroscopy time (improvement), while positive values 
+indicate an increase (worsening).
+
+The derivatives were summarized by site, calculating the average rate of change 
+as well as the minimum and maximum observed rates during the study period. 
+This summary provides insight into both the overall trend and the variability 
+of change over time for each site.
+
+Louisville and Syracuse show a negative average derivative indicating 
+improvement in fluoroscopy time over time
+
+Arizona and St. Louis show a relatively neutral average derivative over time 
+indicating flucating or stable performance
+
+Wilmington showed an average derivative increase over time, concluding that the 
+fluoroscopy time actually worsened as the time period went on 
+
+The accompanying bar plot visualizes these average rates of change for each 
+site, with error bars representing the range of observed rates. This allows 
+for quick comparison of performance dynamics across sites and highlights those 
+with the most favorable or concerning trends.
+
+Overall, this derivative analysis complements the GAM-fitted trends by 
+quantifying the speed and direction of change, helping to identify which sites 
+are improving fluoroscopy efficiency most rapidly, which are stable, and which 
+may need further investigation.
+```{r}
+
+derivs_summary <- derivs %>%
+  group_by(Site) %>%
+  summarise(
+    Avg_Derivative = mean(.derivative),
+    Min_Derivative = min(.derivative),
+    Max_Derivative = max(.derivative),
+    Lower_CI = mean(.lower_ci),
+    Upper_CI = mean(.upper_ci),
+    .groups = "drop"
+  )
+
+ggplot(derivs_summary, aes(x = reorder(Site, Avg_Derivative), 
+                           y = Avg_Derivative)) +
+  geom_col(fill = "steelblue") +
+  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI), width = 0.3) +
+  coord_flip() +
+  labs(title = "Average Monthly Rate of Change in Fluoroscopy Time by 
+       Site with 95% CI",
+       x = "Site",
+       y = "Average Derivative (minutes per month)") +
+  theme_minimal()
+```
+The bar plot displays the average monthly rate of change for each site, with 
+error bars representing the 95% confidence intervals. Sites with confidence 
+intervals entirely below zero suggest statistically significant decreases in 
+fluoroscopy time, indicating consistent improvements. Conversely, sites with 
+confidence intervals overlapping zero suggest less certain or more variable 
+trends.
+
+This analysis offers a clear comparative view of how fluoroscopy efficiency 
+evolves across sites, highlighting those with robust improvements and others 
+where changes may be less definitive. Such insights can guide targeted quality 
+improvement efforts tailored to each site’s unique performance trajectory.
+
+The confidence interval for the average monthly rate of change in fluoroscopy 
+time at the Wilmington site is notably wide, indicating substantial uncertainty 
+in the estimated trend. This high variability likely reflects limited or highly 
+variable data for Wilmington, which reduces confidence in concluding whether 
+fluoroscopy time is increasing or decreasing at this location. As a result, 
+the trend estimates for Wilmington should be interpreted with caution, and 
+further data collection or additional analysis may be necessary to clarify the 
+true temporal pattern at this site.
+
+```{r}
+
+max_month_num <- max(Data1$Month_Num)
+sites <- levels(Data1$Site)
+
+future_months <- data.frame(
+  Month_Num = rep((max_month_num + 1):(max_month_num + 6), 
+                  times = length(sites)),
+  Site = rep(sites, each = 6)
+)
+
+predictions <- predict(gam_model, newdata = future_months, se.fit = TRUE)
+
+future_months <- future_months %>%
+  mutate(
+    Fluoroscopy_Time_Pred = predictions$fit,
+    SE = predictions$se.fit,
+    Lower_CI = Fluoroscopy_Time_Pred - 1.96 * SE,
+    Upper_CI = Fluoroscopy_Time_Pred + 1.96 * SE
+  )
+
+start_date <- min(Data1$Month_Date)
+future_months <- future_months %>%
+  mutate(
+    Forecast_Month = start_date %m+% months(Month_Num - 1)
+  )
+
+
+ggplot() +
+  geom_point(data = Data1, aes(x = Month_Date, y = Fluoroscopy_Time, 
+                               color = Site)) +
+  geom_line(data = Data1, aes(x = Month_Date, y = Fluoroscopy_Time, 
+                              color = Site)) +
+  geom_line(data = future_months, aes(x = Forecast_Month, 
+              y = Fluoroscopy_Time_Pred, color = Site), linetype = "dashed") +
+  geom_ribbon(
+    data = future_months,
+    aes(x = Forecast_Month, ymin = Lower_CI, ymax = Upper_CI, 
+        fill = Site, group = Site),
+    alpha = 0.2,
+    color = NA
+  ) +
+  labs(
+    title = "Fluoroscopy Time: Observed and 6-Month Forecast",
+    x = "Date",
+    y = "Fluoroscopy Time"
+  ) +
+  theme_minimal()
+
+```
+Using the fitted Generalized Additive Model (GAM), fluoroscopy time trends for 
+each clinical site six months beyond the observed data. The model provides 
+predicted fluoroscopy times along with 95% confidence intervals to reflect 
+uncertainty in these forecasts. These predictions, visualized as dashed lines 
+with shaded confidence bands, extend the temporal patterns captured by the model 
+and allow us to anticipate potential changes in fluoroscopy time over the near 
+future. Such forecasting can guide ongoing evaluation of site performance and 
+training effectiveness, while highlighting where further monitoring or 
+intervention might be needed.
+
